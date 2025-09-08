@@ -29,6 +29,8 @@
 #include "hw/i2c/ds1307.h"
 #include "hw/i2c/at24c512.h"
 
+#include "hw/extensions/modem.h"
+
 typedef uint8_t dev_idx_t;
 
 /* Size of the memory space */
@@ -93,6 +95,9 @@ struct zeal_t {
 
     /* Misc features */
     zeal_hostfs_t hostfs;
+
+    /* Extensions */
+    modem_t modem;
 
     /* Debugger related */
 #if CONFIG_ENABLE_DEBUGGER

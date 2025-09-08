@@ -20,3 +20,4 @@ if get_option('enable_debugger')
 endif
 
 subdir('zvb')
+subdir('extensions')

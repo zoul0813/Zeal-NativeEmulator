@@ -444,6 +444,8 @@ int zeal_init(zeal_t* machine)
     err = i2c_connect(&machine->i2c_bus, &machine->rtc.parent);
     CHECK_ERR(err);
 
+    err = modem_init(&machine->modem);
+
     // /* Extensions */
     // const compactflash = new CompactFlash(this);
     const int cf_err = compactflash_init(&machine->compactflash, config.arguments.cf_filename);
@@ -480,6 +482,8 @@ int zeal_init(zeal_t* machine)
     zeal_add_io_device(machine, 0xd0, &machine->pio.parent);
     zeal_add_io_device(machine, 0xe0, &machine->keyboard.parent);
     zeal_add_io_device(machine, 0xf0, &machine->mmu.parent);
+
+    zeal_add_io_device(machine, 0x40, &machine->modem.parent);
 
 #if CONFIG_ENABLE_DEBUGGER
     /* Since the debugger may depend on some components, make sure they are all initialized */
