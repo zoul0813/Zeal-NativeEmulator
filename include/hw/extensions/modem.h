@@ -14,4 +14,4 @@ typedef struct {
 } modem_t;
 
 int modem_init(modem_t* modem);
-// void modem_tick(void);
+void modem_tick(modem_t *modem, int ellapsed);

@@ -613,6 +613,7 @@ static int zeal_dbg_mode_run(zeal_t* machine)
         zvb_tick(&machine->zvb, elapsed_tstates);
         keyboard_tick(&machine->keyboard, &machine->pio, elapsed_tstates);
         flash_tick(&machine->rom, elapsed_tstates);
+        modem_tick(&machine->modem, elapsed_tstates);
 
         /* Check if we reached a breakpoint or if we have to do a single step */
         if (machine->dbg_state == ST_REQ_STEP ||
@@ -656,6 +657,7 @@ static int zeal_normal_mode_run(zeal_t* machine)
     zvb_tick(&machine->zvb, elapsed_tstates);
     keyboard_tick(&machine->keyboard, &machine->pio, elapsed_tstates);
     flash_tick(&machine->rom, elapsed_tstates);
+    modem_tick(&machine->modem, elapsed_tstates);
 
     if (zvb_prepare_render(&machine->zvb)) {
         rendered = 1;

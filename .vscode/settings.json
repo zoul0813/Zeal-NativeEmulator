@@ -2,7 +2,7 @@
   "C_Cpp.default.includePath": ["${workspaceFolder}/include"],
   "C_Cpp.clang_format_sortIncludes": false,
   "C_Cpp.autoAddFileAssociations": false,
-  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+  "C_Cpp.default.compileCommands": "/Users/david.higgins@konghq.com/Documents/Private/zeal/zeal8bit/Zeal-NativeEmulator/builddir/compile_commands.json",
   "C_Cpp.default.configurationProvider": "mesonbuild.mesonbuild",
   "files.insertFinalNewline": true,
   "editor.tabSize": 4,

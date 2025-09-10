@@ -33,14 +33,26 @@ void modem_io_write(device_t* dev, uint32_t addr, uint8_t value) {
     hayes_write_data(&modem->hayes, (uint8_t)addr, value);
 }
 
+void modem_tick(modem_t *modem, int ellapsed) {
+    (void)ellapsed;
+
+    if(modem == NULL) return;
+
+    int ret = hayes_tick(&modem->hayes);
+    if(ret < 0) {
+        log_err_printf("[MODEM] modem_tick: %d\n", ret);
+    }
+}
 
 int modem_init(modem_t* dev) {
     if (dev == NULL) {
         return 1;
     }
 
-    if(!hayes_init(&dev->hayes)) {
+    int err = hayes_init(&dev->hayes);
+    if (err) {
         log_err_printf("[MODEM] Failed to initialize Hayes modem\n");
+        return 1;
     }
 
     device_init_io(DEVICE(dev),  "modem_dev", modem_io_read, modem_io_write, MODEM_IO_SIZE);
