@@ -17,49 +17,24 @@
 #include "hw/extensions/modem.h"
 #include "hw/extensions/hayes.h"
 
-
-/* command parsing */
-static char cmd_buf[CMD_BUF_SIZE];
-static size_t cmd_len = 0;
-
-// static int sockfd;
-
-static uint8_t rx_buf[RX_BUF_SIZE];
-static size_t rx_head = 0; // pop from head
-static size_t rx_tail = 0; // push to tail
-
-/* helpers for ring buffer */
-static size_t rx_space(void) {
-    if (rx_tail >= rx_head) return RX_BUF_SIZE - (rx_tail - rx_head) - 1;
-    return rx_head - rx_tail - 1;
-}
-static size_t rx_pending(void) {
-    if (rx_tail >= rx_head) return rx_tail - rx_head;
-    return RX_BUF_SIZE - (rx_head - rx_tail);
-}
-static void rx_push(uint8_t b) {
-    if (rx_space() == 0) return; // drop if full
-    rx_buf[rx_tail++] = b;
-    if (rx_tail >= RX_BUF_SIZE) rx_tail = 0;
-}
-static int rx_pop(uint8_t *out) {
-    if (rx_pending() == 0) return 0;
-    *out = rx_buf[rx_head++];
-    if (rx_head >= RX_BUF_SIZE) rx_head = 0;
-    return 1;
-}
+#ifndef MIN
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#endif
 
 /* push an ASCII string into RX (modem -> guest), helper for result codes */
-static void push_response(const char *s) {
+static void push_response(hayes_t *hayes, const char *s) {
     while (*s) {
-        rx_push((uint8_t)*s++);
+        fifo_push(&hayes->rx_fifo, (uint8_t)*s++);
     }
-    rx_push('\r'); // result codes usually end with CR (often CR LF; we use CR)
+    fifo_push(&hayes->rx_fifo, (uint8_t) '\r'); // result codes usually end with CR (often CR LF; we use CR)
 }
 
 /* lowercase helper */
 static void to_upper_ascii(char *s) {
-    while (*s) { *s = (char)toupper((unsigned char)*s); s++; }
+    while (*s) {
+        *s = (char) toupper(*s);
+        s++;
+    }
 }
 
 
@@ -68,7 +43,7 @@ int socket_connect(hayes_t *hayes, const char *host, const char *port) {
     hayes->socket = -1;
     int rv;
 
-    memset(&hints, 0, sizeof hints);
+    memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
@@ -96,8 +71,8 @@ int socket_connect(hayes_t *hayes, const char *host, const char *port) {
 
     fcntl(hayes->socket, F_SETFL, O_NONBLOCK);
 
-    strncpy(hayes->host, host, strlen(host));
-    strncpy(hayes->port, port, strlen(port));
+    strncpy(hayes->host, host, sizeof(hayes->host));
+    strncpy(hayes->port, port, sizeof(hayes->port));
 
     return 0;
 }
@@ -123,9 +98,8 @@ int socket_read(hayes_t *hayes) {
     if(hayes->socket < 0) return 1;
 
     // read the response line
-    char buf[128];
-    ssize_t n;
-    n = recv(hayes->socket, buf, sizeof(buf), 0);
+    uint8_t buf[128];
+    ssize_t n = recv(hayes->socket, buf, sizeof(buf), 0);
     if(n < 0) {
         if(errno == EAGAIN || errno == EWOULDBLOCK) {
             return 0;
@@ -137,9 +111,8 @@ int socket_read(hayes_t *hayes) {
     }
 
     hayes->bytes += n;
-    for(ssize_t i = 0; i < n; i++) {
-        unsigned char c = buf[i];
-        rx_push(c);
+    for (ssize_t i = 0; i < n; i++) {
+        fifo_push(&hayes->rx_fifo, buf[i]);
     }
     return 0;
 }
@@ -198,7 +171,7 @@ int socket_poll(hayes_t *hayes) {
         if(pfd.revents & POLLHUP) {
             log_err_printf("[MODEM] socket_poll: POLLHUP %d\n", errno);
         } else {
-            log_err_printf("[MODEM] socket_poll: POLLERR\n", errno);
+            log_err_printf("[MODEM] socket_poll: POLLERR %d\n", errno);
         }
         hangup(hayes);
         return -2;
@@ -211,8 +184,8 @@ int socket_poll(hayes_t *hayes) {
 void process_at_command(hayes_t *hayes) {
     // ensure a zero-terminated upper-case copy
     char tmp[CMD_BUF_SIZE];
-    size_t n = cmd_len < (CMD_BUF_SIZE - 1) ? cmd_len : (CMD_BUF_SIZE - 1);
-    memcpy(tmp, cmd_buf, n);
+    size_t n = MIN(hayes->cmd_len, (CMD_BUF_SIZE - 1));
+    memcpy(tmp, hayes->cmd_buf, n);
     tmp[n] = '\0';
     // trim trailing CR/LF/space
     while (n && (tmp[n-1] == '\r' || tmp[n-1] == '\n' || tmp[n-1] == ' ')) { tmp[--n] = '\0'; }
@@ -222,15 +195,15 @@ void process_at_command(hayes_t *hayes) {
     // If the command is just "AT" => OK
     if (strcmp(tmp, "AT") == 0) {
         if (hayes->echo) {
-            push_response("AT");
+            push_response(hayes, "AT");
         }
-        push_response("OK");
+        push_response(hayes, "OK");
         return;
     }
 
     // simple echo of typed AT cmds if echo enabled
     if (hayes->echo) {
-        push_response(tmp);
+        push_response(hayes, tmp);
     }
 
     // `ATO` — Return to Online Data Mode
@@ -238,9 +211,9 @@ void process_at_command(hayes_t *hayes) {
         // go to data mode if we had a previous connection
         if (hayes->carrier) {
             hayes->command_mode = 0;
-            push_response("CONNECT");
+            push_response(hayes, "CONNECT");
         } else {
-            push_response("ERROR");
+            push_response(hayes, "ERROR");
         }
         return;
     }
@@ -253,20 +226,21 @@ void process_at_command(hayes_t *hayes) {
         hayes->carrier = 0;
         hayes->command_mode = 1;
         socket_close(hayes);
-        push_response("OK");
+        push_response(hayes, "OK");
         return;
     }
 
     // `ATE0` - Disable local echo
     if (strcmp(tmp, "ATE0") == 0) {
         hayes->echo = 0;
-        push_response("OK"); return;
+        push_response(hayes, "OK");
+        return;
     }
 
     // `ATE1` - Enable local echo
     if (strcmp(tmp, "ATE1") == 0) {
         hayes->echo = 1;
-        push_response("OK");
+        push_response(hayes, "OK");
         return;
     }
 
@@ -290,11 +264,11 @@ void process_at_command(hayes_t *hayes) {
         }
 
         // let the user program know that the request was well-formed
-        push_response("OK");
+        push_response(hayes, "OK");
 
         int sock = socket_connect(hayes, host, port);
         if(sock < 0) {
-            push_response("ERROR");
+            push_response(hayes, "ERROR");
             return;
         }
 
@@ -305,7 +279,7 @@ void process_at_command(hayes_t *hayes) {
     }
 
     if(strcmp(tmp, "ATI") == 0) {
-        push_response("Zeal 8-bit ESP32 Hayes Modem");
+        push_response(hayes, "Zeal 8-bit ESP32 Hayes Modem");
         return;
     }
 
@@ -317,12 +291,12 @@ void process_at_command(hayes_t *hayes) {
     //     // answer: connect (simulate immediate connect)
     //     hayes->carrier = 1;
     //     hayes->command_mode = 0;
-    //     push_response("CONNECT");
+    //     push_response(hayes, "CONNECT");
     //     return;
     // }
 
     // Unknown
-    push_response("ERROR");
+    push_response(hayes, "ERROR");
 }
 
 void hayes_write_data(hayes_t *hayes, uint8_t addr, uint8_t value)
@@ -332,22 +306,24 @@ void hayes_write_data(hayes_t *hayes, uint8_t addr, uint8_t value)
             if (hayes->command_mode) {
                 // In command mode, accumulate bytes until CR is seen
                 if (value == '\r' || value == '\n') {
-                    if (cmd_len > 0) {
+                    if (hayes->cmd_len > 0) {
                         // process command line
-                        log_printf("[MODEM] AT Command: %s\n", cmd_buf);
+                        log_printf("[MODEM] AT Command: %s\n", hayes->cmd_buf);
                         process_at_command(hayes);
-                        cmd_len = 0;
+                        hayes->cmd_len = 0;
                     } else {
                         // blank line -> OK per some modems
-                        push_response("OK");
+                        push_response(hayes, "OK");
                     }
                 } else {
-                    if (cmd_len < (CMD_BUF_SIZE - 1)) {
-                        cmd_buf[cmd_len++] = (char)value;
+                    if (hayes->cmd_len < (CMD_BUF_SIZE - 1)) {
+                        hayes->cmd_buf[hayes->cmd_len++] = (char)value;
                     }
                 }
                 // echo if enabled
-                if (hayes->echo) rx_push(value);
+                if (hayes->echo) {
+                    fifo_push(&hayes->rx_fifo, value);
+                }
             } else {
                 // DATA mode: this byte is sent out the "line"
                 // if (modem_send_cb) modem_send_cb(value, modem_cb_user);
@@ -380,17 +356,14 @@ int hayes_read_data(hayes_t *hayes, uint8_t addr)
 {
     switch (addr) {
         case HAYES_PORT_DATA: { // DATA port
+            /* b will not be modified if no data was available */
             uint8_t b = 0x00;
-            if (rx_pop(&b)) {
-                return b;
-            } else {
-                // When nothing to read, return 0x00 or 0xFF per your emulator preference
-                return 0x00;
-            }
+            fifo_pop(&hayes->rx_fifo, &b);
+            return b;
         }
         case HAYES_PORT_CTRL: { // STATUS
             uint8_t s = 0;
-            if (rx_pending()) s |= ST_RX_AVAIL;
+            if (fifo_size(&hayes->rx_fifo)) s |= ST_RX_AVAIL;
             s |= ST_TX_READY; // always ready
             if (hayes->carrier) s |= ST_CARRIER;
             if (hayes->ringing) s |= ST_RING;
@@ -410,8 +383,12 @@ int hayes_init(hayes_t *hayes) {
 
     hayes->command_mode = 1; // start in command mode (typical for modems)
     hayes->echo = 1; // ATE1 default
+    hayes->cmd_len = 0;
 
-    rx_head = rx_tail = 0;
+    if (!fifo_init(&hayes->rx_fifo, RX_BUF_SIZE)) {
+        log_err_printf("[MODEM] Could not allocate memory\n");
+        return -1;
+    }
 
     return 0;
 }
@@ -419,10 +396,8 @@ int hayes_init(hayes_t *hayes) {
 int hayes_tick(hayes_t *hayes) {
     int ret = socket_poll(hayes);
 
-    if(ret > 0) {
-        if(!rx_pending()) {
-            socket_read(hayes);
-        }
+    if(ret > 0 && !fifo_size(&hayes->rx_fifo)) {
+        socket_read(hayes);
     }
 
     return ret;

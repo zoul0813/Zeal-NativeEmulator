@@ -10,6 +10,10 @@
 #include <stdio.h>
 #include <math.h>
 
+#ifndef MIN
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#endif
+
 #define KB         1024
 #define CPUFREQ    10000000UL
 #define TSTATES_US (1.0 / CPUFREQ * 1000000)

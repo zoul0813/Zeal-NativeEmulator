@@ -1,5 +1,7 @@
 #pragma once
 
+#include "utils/fifo.h"
+
 #define HAYES_PORT_DATA 0x0
 #define HAYES_PORT_CTRL 0x1
 
@@ -29,6 +31,10 @@ typedef struct {
     int bytes;
     char host[256];
     char port[16];
+
+    fifo_t rx_fifo;
+    char   cmd_buf[CMD_BUF_SIZE];
+    size_t cmd_len;
 } hayes_t;
 
 int hayes_init(hayes_t *hayes);
