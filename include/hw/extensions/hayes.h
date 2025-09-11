@@ -2,8 +2,9 @@
 
 #include "utils/fifo.h"
 
-#define HAYES_PORT_DATA 0x0
-#define HAYES_PORT_CTRL 0x1
+#define HAYES_PORT_CTRL 0x0
+#define HAYES_PORT_DATA 0x1
+#define HAYES_PORT_CMD  0x2
 
 /* --- Configuration --- */
 #define RX_BUF_SIZE     1024
@@ -15,8 +16,7 @@
 #define ST_TX_READY   (1 << 1) // 0x02
 #define ST_CARRIER    (1 << 2) // 0x04
 #define ST_RING       (1 << 3) // 0x08
-#define ST_CMDMODE    (1 << 4) // 0x10
-#define ST_ECHO       (1 << 5) // 0x20?
+#define ST_ECHO       (1 << 4) // 0x20?
 
 #define SOCKET_STATE  -1
 
@@ -32,7 +32,8 @@ typedef struct {
     char host[256];
     char port[16];
 
-    fifo_t rx_fifo;
+    fifo_t data_fifo;
+    fifo_t cmd_fifo;
     char   cmd_buf[CMD_BUF_SIZE];
     size_t cmd_len;
 } hayes_t;
