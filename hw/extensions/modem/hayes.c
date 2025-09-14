@@ -11,11 +11,12 @@
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <poll.h>
+#include <sys/select.h>
 
-#include "utils/log.h"
-#include "hw/extensions/modem.h"
 #include "hw/extensions/hayes.h"
+
+static const char *TAG = "HAYES";
+
 
 #ifndef MIN
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
@@ -37,47 +38,6 @@ static void to_upper_ascii(char *s) {
     }
 }
 
-
-int socket_connect(hayes_t *hayes, const char *host, const char *port) {
-    struct addrinfo hints, *res, *p;
-    hayes->socket = -1;
-    int rv;
-
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-
-    if ((rv = getaddrinfo(host, port, &hints, &res)) != 0) {
-        log_err_printf("getaddrinfo: %s\n", gai_strerror(rv));
-        return -1;
-    }
-
-    for (p = res; p != NULL; p = p->ai_next) {
-        hayes->socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-        if (hayes->socket == -1) continue;
-
-        if (connect(hayes->socket, p->ai_addr, p->ai_addrlen) == 0) break;
-
-        close(hayes->socket);
-        hayes->socket = -1;
-    }
-
-    freeaddrinfo(res);
-
-    if (hayes->socket == -1) {
-        log_err_printf("Failed to connect to %s:13\n", host);
-        return -1;
-    }
-
-    fcntl(hayes->socket, F_SETFL, O_NONBLOCK);
-
-    strncpy(hayes->host, host, sizeof(hayes->host));
-    strncpy(hayes->port, port, sizeof(hayes->port));
-    fifo_reset(&hayes->data_fifo);
-
-    return 0;
-}
-
 void hangup(hayes_t *hayes) {
     hayes->socket = -1;
     hayes->carrier = 0;
@@ -95,6 +55,46 @@ int socket_close(hayes_t *hayes) {
     return 1;
 }
 
+int socket_connect(hayes_t *hayes, const char *host, const char *port) {
+    struct addrinfo hints, *res, *p;
+    hayes->socket = -1;
+    int rv;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if ((rv = getaddrinfo(host, port, &hints, &res)) != 0) {
+        HAYES_LOGW(TAG, "getaddrinfo: %s\n", gai_strerror(rv));
+        return -1;
+    }
+
+    for (p = res; p != NULL; p = p->ai_next) {
+        hayes->socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (hayes->socket == -1) continue;
+
+        if (connect(hayes->socket, p->ai_addr, p->ai_addrlen) == 0) break;
+
+        close(hayes->socket);
+        hayes->socket = -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (hayes->socket == -1) {
+        HAYES_LOGW(TAG, "Failed to connect to %s:13\n", host);
+        return -1;
+    }
+
+    fcntl(hayes->socket, F_SETFL, O_NONBLOCK);
+
+    strncpy(hayes->host, host, sizeof(hayes->host));
+    strncpy(hayes->port, port, sizeof(hayes->port));
+    fifo_reset(&hayes->data_fifo);
+
+    return 0;
+}
+
 int socket_read(hayes_t *hayes) {
     if(hayes->socket < 0) return 1;
 
@@ -106,7 +106,7 @@ int socket_read(hayes_t *hayes) {
             return 0;
         } else {
             socket_close(hayes);
-            log_perror("socket_read");
+            HAYES_LOGE(TAG, "socket_read");
             return errno;
         }
     }
@@ -124,7 +124,7 @@ int socket_write(hayes_t *hayes, uint8_t value) {
     ssize_t n = send(hayes->socket, &value, 1, 0);
     if(n < 0) {
         socket_close(hayes);
-        log_perror("socket_write");
+        HAYES_LOGE(TAG, "socket_write");
         return -1;
     }
     return (int)n;
@@ -135,14 +135,16 @@ int socket_poll(hayes_t *hayes) {
         return 0;
     }
 
-    struct pollfd pfd;
-    pfd.fd = hayes->socket;
-    pfd.events = POLLIN | POLLHUP | POLLERR;
+    fd_set rfds;
+    struct timeval tv = { .tv_sec = 0, .tv_usec = 0 };
 
-    int ret = poll(&pfd, 1, 0);
+    FD_ZERO(&rfds);
+    FD_SET(hayes->socket, &rfds);
+
+    int ret = select(hayes->socket+1, &rfds, NULL, NULL, &tv);
     if(ret < 0) {
         hangup(hayes);
-        log_perror("[MODEM] socket_poll");
+        HAYES_LOGE(TAG, "socket_poll");
         return -1;
     }
 
@@ -150,32 +152,22 @@ int socket_poll(hayes_t *hayes) {
         return 0;
     }
 
-    if (pfd.revents & POLLIN) {
+    if (ret > 0) {
         char tmp;
         ssize_t n = recv(hayes->socket, &tmp, 1, MSG_PEEK);
         if(n == 0) {
             hangup(hayes);
-            log_printf("[MODEM] carrier hung up\n");
+            HAYES_LOGI(TAG, "carrier hung up");
             return -3;
         } else if(n < 0) {
             if(errno != EWOULDBLOCK && errno != EAGAIN) {
-                log_perror("[MODEM] socket_poll: connection lost");
+                HAYES_LOGE(TAG, "socket_poll: connection lost");
                 hangup(hayes);
                 return -4;
             }
         }
 
         return 1;
-    }
-
-    if(pfd.revents & (POLLHUP | POLLERR)) {
-        if(pfd.revents & POLLHUP) {
-            log_err_printf("[MODEM] socket_poll: POLLHUP %d\n", errno);
-        } else {
-            log_err_printf("[MODEM] socket_poll: POLLERR %d\n", errno);
-        }
-        hangup(hayes);
-        return -2;
     }
 
     return 0;
@@ -248,7 +240,11 @@ void process_at_command(hayes_t *hayes) {
 
     // `ATD<number>` - Dial a number
     if (n >= 3 && strncmp(tmp, "ATD", 3) == 0) {
-        // // extract number (we won't really use it)
+        if(hayes->carrier) {
+            push_response(hayes, "BUSY");
+            return;
+        }
+
         const char *uri = tmp + 3;
         char buf[256];
         strncpy(buf, uri, sizeof(buf)-1);
@@ -303,7 +299,7 @@ void hayes_write_data(hayes_t *hayes, uint8_t addr, uint8_t value)
 {
     switch (addr) {
         case HAYES_PORT_DATA:  // DATA
-            log_printf("[MODEM] send %02x\n", value);
+            HAYES_LOGI(TAG, "send %02x\n", value);
             socket_write(hayes, value);
             break;
         case HAYES_PORT_CMD:
@@ -311,7 +307,7 @@ void hayes_write_data(hayes_t *hayes, uint8_t addr, uint8_t value)
             if (value == '\r' || value == '\n') {
                 if (hayes->cmd_len > 0) {
                     // process command line
-                    log_printf("[MODEM] AT Command: %s\n", hayes->cmd_buf);
+                    HAYES_LOGI(TAG, "AT Command: %s\n", hayes->cmd_buf);
                     process_at_command(hayes);
                     hayes->cmd_len = 0;
                 } else {
@@ -336,7 +332,7 @@ void hayes_write_data(hayes_t *hayes, uint8_t addr, uint8_t value)
             break;
         default:
             // ignore
-            log_printf("[MODEM] io_write: Unmapped port %02x %02x\n", addr, value);
+            HAYES_LOGI(TAG, "io_write: Unmapped port %02x %02x\n", addr, value);
             break;
     }
 }
@@ -367,7 +363,7 @@ int hayes_read_data(hayes_t *hayes, uint8_t addr)
         }
         default:
             // unmapped ports read as 0xFF
-            log_printf("[MODEM] io_read: Unmapped port %02x\n", addr);
+            HAYES_LOGI(TAG, "io_read: Unmapped port %02x\n", addr);
             return 0xFF;
     }
 }
@@ -379,12 +375,12 @@ int hayes_init(hayes_t *hayes) {
     hayes->cmd_len = 0;
 
     if (!fifo_init(&hayes->data_fifo, RX_BUF_SIZE)) {
-        log_err_printf("[MODEM] Could not allocate data fifo\n");
+        HAYES_LOGW(TAG, "Could not allocate data fifo\n");
         return -1;
     }
 
     if (!fifo_init(&hayes->cmd_fifo, CMD_BUF_SIZE)) {
-        log_err_printf("[MODEM] Could not allocate command fifo\n");
+        HAYES_LOGW(TAG, "Could not allocate command fifo\n");
         return -1;
     }
 

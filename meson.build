@@ -56,7 +56,7 @@ if res.returncode() != 0
   warning('default.img not found, skipping copy')
 endif
 
-
+add_project_arguments('-DZEAL_NATIVE', language: 'c')
 if (get_option('show_fps'))
     add_project_arguments('-DCONFIG_SHOW_FPS', language: 'c')
 endif

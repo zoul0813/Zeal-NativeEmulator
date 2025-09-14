@@ -1,5 +1,25 @@
 #pragma once
 
+#ifdef ESP_PLATFORM
+typedef esp_err_t hayes_err_t;
+#else
+typedef int hayes_err_t;
+#endif
+
+#ifdef ESP_PLATFORM
+#include "esp_log.h"
+#include "esp_err.h"
+#define HAYES_LOGI(t, f, ...) ESP_LOGI(t, f, ##__VA_ARGS__)
+#define HAYES_LOGW(t, f, ...) ESP_LOGW(t, f, ##__VA_ARGS__)
+#define HAYES_LOGE(t, f, ...) ESP_LOGE(t, f, ##__VA_ARGS__)
+#define gai_strerror(rv)    esp_err_to_name(rv)
+#else
+#include "utils/log.h"
+#define HAYES_LOGI(t, f, ...) log_printf("[%s] "f, t, ##__VA_ARGS__)
+#define HAYES_LOGW(t, f, ...) log_err_printf("[%s] "f, t, ##__VA_ARGS__)
+#define HAYES_LOGE(t, f, ...) log_perror("[%s] "f, t, ##__VA_ARGS__)
+#endif
+
 #include "utils/fifo.h"
 
 #define HAYES_PORT_CTRL 0x0
