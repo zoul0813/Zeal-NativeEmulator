@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
@@ -16,6 +15,7 @@
 #include "hw/extensions/hayes.h"
 
 static const char *TAG = "HAYES";
+static const char *VERSION = "0.0.0-alpha";
 
 
 #ifndef MIN
@@ -24,6 +24,7 @@ static const char *TAG = "HAYES";
 
 /* push an ASCII string into RX (modem -> guest), helper for result codes */
 static void push_response(hayes_t *hayes, const char *s) {
+    HAYES_LOGI(TAG, "push_response %s\n", s);
     while (*s) {
         fifo_push(&hayes->cmd_fifo, (uint8_t)*s++);
     }
@@ -279,6 +280,33 @@ void process_at_command(hayes_t *hayes) {
         return;
     }
 
+    if(strncmp(tmp, "AT+", 3) == 0) {
+        char buf[1024];
+        if(strlen(tmp) <= 3) {
+            push_response(hayes, "ERROR");
+            return;
+        }
+        const char *sub = &tmp[3];
+        if(strcmp(sub, "V") == 0) {
+            push_response(hayes, VERSION);
+            return;
+        }
+        if(strcmp(sub, "CS") == 0) {
+            sprintf(buf, "CARRIER: %s", hayes->carrier ? "YES" : "NO");
+            push_response(hayes, buf);
+            return;
+        }
+        if(strcmp(sub, "CLCC") == 0) {
+            if(hayes->carrier) {
+                sprintf(buf, "HOST: %s:%s", hayes->host, hayes->port);
+            } else {
+                sprintf(buf, "HOST: Disconnected");
+            }
+            push_response(hayes, buf);
+            return;
+        }
+    }
+
     /**
      * Unsupported AT commands
      */
@@ -306,6 +334,7 @@ void hayes_write_data(hayes_t *hayes, uint8_t addr, uint8_t value)
             // In command mode, accumulate bytes until CR is seen
             if (value == '\r' || value == '\n') {
                 if (hayes->cmd_len > 0) {
+                    hayes->cmd_buf[hayes->cmd_len] = '\0';
                     // process command line
                     HAYES_LOGI(TAG, "AT Command: %s\n", hayes->cmd_buf);
                     process_at_command(hayes);
