@@ -92,6 +92,7 @@ int socket_connect(hayes_t *hayes, const char *host, const char *port) {
     strncpy(hayes->host, host, sizeof(hayes->host));
     strncpy(hayes->port, port, sizeof(hayes->port));
     fifo_reset(&hayes->data_fifo);
+    hayes->carrier = 1;
 
     return 0;
 }
@@ -268,10 +269,7 @@ void process_at_command(hayes_t *hayes) {
             return;
         }
 
-        // let the user program know that the request was well-formed
-        push_response(hayes, "OK");
-        hayes->carrier = 1;
-
+        push_response(hayes, "CONNECTING");
         return;
     }
 
